@@ -3,6 +3,7 @@ import unittest
 from collections import OrderedDict
 from pickle import dumps, loads, PicklingError
 from enum import Enum, IntEnum
+from itertools import count
 
 # for pickle tests
 try:
@@ -616,9 +617,25 @@ class TestEnum(unittest.TestCase):
         self.assertEqual(repr(MyIntEnum.that), "My name is that.")
 
     def test_multiple_mixin_mro(self):
+
+        class AutoNumberedEnum(Enum):
+            def _counter():
+                _counter = count(1)
+                return lambda self: next(_counter)
+            _counter = _counter()
+
+            def __init__(self, value):
+                if value is Ellipsis:
+                    while True:
+                        value = self._counter()
+                        if all(member.value != value
+                               for member in type(self).__members__.values()):
+                            self._value = value
+                            break
+
         class auto_enum(type(Enum)):
             def __new__(metacls, cls, bases, classdict):
-                temp = type(classdict)()
+                temp = type(classdict)(int)
                 names = set(classdict._member_names)
                 i = 0
                 for k in classdict._member_names:
@@ -634,9 +651,6 @@ class TestEnum(unittest.TestCase):
                         temp[k] = v
                 return super(auto_enum, metacls).__new__(
                         metacls, cls, bases, temp)
-
-        class AutoNumberedEnum(Enum, metaclass=auto_enum):
-            pass
 
         class AutoIntEnum(IntEnum, metaclass=auto_enum):
             pass
@@ -773,13 +787,23 @@ class TestEnum(unittest.TestCase):
             first = ()
             second = ()
             third = ()
-            def __new__(cls):
-                value = len(cls.__members__) + 1
-                obj = object.__new__(cls)
-                obj._value = value
-                return obj
+
+            def _counter():
+                _counter = count(1)
+                return lambda self: next(_counter)
+            _counter = _counter()
+
+            def __init__(self):
+                while True:
+                    value = self._counter()
+                    if all(member.value != value
+                           for member in type(self).__members__.values()):
+                        self._value = value
+                        break
+
             def __int__(self):
                 return int(self._value)
+
         self.assertEqual(
                 list(AutoNumber),
                 [AutoNumber.first, AutoNumber.second, AutoNumber.third],
@@ -789,11 +813,19 @@ class TestEnum(unittest.TestCase):
 
     def test_inherited_new_from_enhanced_enum(self):
         class AutoNumber(Enum):
-            def __new__(cls):
-                value = len(cls.__members__) + 1
-                obj = object.__new__(cls)
-                obj._value = value
-                return obj
+            def _counter():
+                _counter = count(1)
+                return lambda self: next(_counter)
+            _counter = _counter()
+
+            def __init__(self):
+                while True:
+                    value = self._counter()
+                    if all(member.value != value
+                           for member in type(self).__members__.values()):
+                        self._value = value
+                        break
+
             def __int__(self):
                 return int(self._value)
         class Color(AutoNumber):
@@ -915,6 +947,12 @@ class TestEnum(unittest.TestCase):
                 return G * self.mass / (self.radius * self.radius)
         self.assertEqual(round(Planet.EARTH.surface_gravity, 2), 9.80)
         self.assertEqual(Planet.EARTH.value, (5.976e+24, 6.37814e6))
+
+    def test_backward_reference(self):
+        class StateMachine(Enum):
+            A = {}
+            B = {1: A}
+        self.assertEqual(StateMachine.B.value[1], StateMachine.A)
 
 
 if __name__ == '__main__':

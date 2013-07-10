@@ -60,9 +60,10 @@ class _EnumDict(dict):
     enumeration member names.
 
     """
-    def __init__(self):
+    def __init__(self, enum_class):
         super().__init__()
         self._member_names = []
+        self._enum_class = enum_class
 
     def __setitem__(self, key, value):
         """Changes anything not dundered or that doesn't have __get__.
@@ -85,11 +86,17 @@ class _EnumDict(dict):
                 # _member_names or it will become an enum anyway when the class
                 # is created
                 self._member_names.remove(key)
+            added = value
         else:
             if key in self._member_names:
                 raise TypeError('Attempted to reuse key: %r' % key)
             self._member_names.append(key)
-        super().__setitem__(key, value)
+            try:
+                added = object.__new__(self._enum_class)
+                added._value = value
+            except TypeError:
+                added = value
+        super().__setitem__(key, added)
 
 
 # Dummy value for Enum as EnumMeta explicity checks for it, but of course until
@@ -102,7 +109,8 @@ class EnumMeta(type):
     """Metaclass for Enum"""
     @classmethod
     def __prepare__(metacls, cls, bases):
-        return _EnumDict()
+        enum_class = super().__new__(metacls, cls, bases, {})
+        return _EnumDict(enum_class)
 
     def __new__(metacls, cls, bases, classdict):
         # an Enum class is final once enumeration items have been defined; it
@@ -145,27 +153,35 @@ class EnumMeta(type):
         # a custom __new__ is doing something funky with the values -- such as
         # auto-numbering ;)
         for member_name in classdict._member_names:
-            value = members[member_name]
+            member = members[member_name]
+            if isinstance(member, Enum):
+                value = member._value
+            else:
+                value = member
             if not isinstance(value, tuple):
                 args = (value, )
             else:
                 args = value
             if member_type is tuple:   # special case for tuple enums
                 args = (args, )     # wrap it one more time
-            if not use_args:
-                enum_member = __new__(enum_class)
-                enum_member._value = value
+            if isinstance(member, Enum):
+                enum_member = member
+                enum_member.__class__ = enum_class
             else:
-                enum_member = __new__(enum_class, *args)
-                if not hasattr(enum_member, '_value'):
-                    enum_member._value = member_type(*args)
+                if not use_args:
+                    enum_member = __new__(enum_class)
+                    enum_member._value = value
+                else:
+                    enum_member = __new__(enum_class, *args)
+                    if not hasattr(enum_member, '_value'):
+                        enum_member._value = member_type(*args)
             enum_member._member_type = member_type
             enum_member._name = member_name
             enum_member.__init__(*args)
             # If another member with the same value was already defined, the
             # new member becomes an alias to the existing one.
             for name, canonical_member in enum_class._member_map.items():
-                if canonical_member.value == enum_member._value:
+                if canonical_member._value == enum_member._value:
                     enum_member = canonical_member
                     break
             else:
