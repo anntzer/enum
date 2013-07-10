@@ -1,7 +1,8 @@
 """Python Enumerations"""
 
+import builtins
+from collections import ChainMap, OrderedDict
 import sys
-from collections import OrderedDict
 from types import MappingProxyType
 
 __all__ = ['Enum', 'IntEnum']
@@ -63,6 +64,7 @@ class _EnumDict(dict):
     def __init__(self, enum_class):
         super().__init__()
         self._member_names = []
+        self._undefined_names = {}
         self._enum_class = enum_class
 
     def __setitem__(self, key, value):
@@ -90,13 +92,42 @@ class _EnumDict(dict):
         else:
             if key in self._member_names:
                 raise TypeError('Attempted to reuse key: %r' % key)
-            self._member_names.append(key)
             try:
-                added = object.__new__(self._enum_class)
-                added._value = value
-            except TypeError:
-                added = value
+                if self._undefined_names.pop(key):
+                    added = self[key]
+                    added._name = key
+                    added._value = value
+                else:
+                    added = self[key] = value
+            except KeyError:
+                self._member_names.append(key)
+                try:
+                    added = object.__new__(self._enum_class)
+                    added._value = value
+                except TypeError:
+                    added = value
         super().__setitem__(key, added)
+
+    def __getitem__(self, key):
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            if _is_sunder(key) or _is_dunder(key):
+                raise
+            else:
+                frame = sys._getframe(2)
+                try:
+                    return ChainMap(
+                        frame.f_locals, frame.f_globals, vars(builtins))[key]
+                except KeyError:
+                    try:
+                        added = object.__new__(self._enum_class)
+                        self._undefined_names[key] = True
+                    except TypeError:
+                        added = None
+                        self._undefined_names[key] = False
+            super().__setitem__(key, added)
+            return added
 
 
 # Dummy value for Enum as EnumMeta explicity checks for it, but of course until
@@ -126,6 +157,10 @@ class EnumMeta(type):
         members = {k: classdict[k] for k in classdict._member_names}
         for name in classdict._member_names:
             del classdict[name]
+
+        if classdict._undefined_names:
+            raise ValueError('Undefined enum member: {0}'.format(
+                ','.join(classdict._undefined_names)))
 
         # check for illegal enum names (any others?)
         invalid_names = set(members) & {'mro', }
