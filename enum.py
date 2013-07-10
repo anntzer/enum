@@ -1,7 +1,6 @@
 """Python Enumerations"""
 
-import builtins
-from collections import ChainMap, OrderedDict
+from collections import OrderedDict
 import sys
 from types import MappingProxyType
 
@@ -54,6 +53,9 @@ def _make_class_unpicklable(cls):
     cls.__module__ = '<unknown>'
 
 
+_undefined = object()
+
+
 class _EnumDict(dict):
     """Keeps track of definition order of the enum items.
 
@@ -61,11 +63,12 @@ class _EnumDict(dict):
     enumeration member names.
 
     """
-    def __init__(self, enum_class):
+    def __init__(self, enum_class, declaration=_undefined):
         super().__init__()
         self._member_names = []
         self._undefined_names = {}
         self._enum_class = enum_class
+        self._declaration = declaration
 
     def __setitem__(self, key, value):
         """Changes anything not dundered or that doesn't have __get__.
@@ -74,8 +77,12 @@ class _EnumDict(dict):
         is removed from _member_names (this may leave a hole in the numerical
         sequence of values).
 
-        If an enum member name is used twice, an error is raised; duplicate
-        values are not checked for.
+        If an enum member name is used twice, an error is raised, except
+        if the first use assigned a value equal to the value passed as the
+        "declaration" keyword argument, in which case the first use is
+        considered a forward declaration and the second use gives the member
+        its actual value (thus allowing circular references).  Duplicate values
+        are not checked for.
 
         Single underscore (sunder) names are reserved.
 
@@ -100,34 +107,21 @@ class _EnumDict(dict):
                 else:
                     added = self[key] = value
             except KeyError:
-                self._member_names.append(key)
-                try:
-                    added = object.__new__(self._enum_class)
-                    added._value = value
-                except TypeError:
-                    added = value
-        super().__setitem__(key, added)
-
-    def __getitem__(self, key):
-        try:
-            return super().__getitem__(key)
-        except KeyError:
-            if _is_sunder(key) or _is_dunder(key):
-                raise
-            else:
-                frame = sys._getframe(2)
-                try:
-                    return ChainMap(
-                        frame.f_locals, frame.f_globals, vars(builtins))[key]
-                except KeyError:
+                if value is self._declaration:
                     try:
                         added = object.__new__(self._enum_class)
                         self._undefined_names[key] = True
                     except TypeError:
                         added = None
                         self._undefined_names[key] = False
-            super().__setitem__(key, added)
-            return added
+                else:
+                    self._member_names.append(key)
+                    try:
+                        added = object.__new__(self._enum_class)
+                        added._value = value
+                    except TypeError:
+                        added = value
+        super().__setitem__(key, added)
 
 
 # Dummy value for Enum as EnumMeta explicity checks for it, but of course until
@@ -139,11 +133,11 @@ Enum = None
 class EnumMeta(type):
     """Metaclass for Enum"""
     @classmethod
-    def __prepare__(metacls, cls, bases):
+    def __prepare__(metacls, cls, bases, *, declaration=_undefined):
         enum_class = super().__new__(metacls, cls, bases, {})
-        return _EnumDict(enum_class)
+        return _EnumDict(enum_class, declaration)
 
-    def __new__(metacls, cls, bases, classdict):
+    def __new__(metacls, cls, bases, classdict, *, declaration=_undefined):
         # an Enum class is final once enumeration items have been defined; it
         # cannot be mixed with other types (int, float, etc.) if it has an
         # inherited __new__ unless a new __new__ is defined (or the resulting
@@ -249,6 +243,9 @@ class EnumMeta(type):
                 enum_class.__new_member__ = __new__
             enum_class.__new__ = Enum.__new__
         return enum_class
+
+    def __init__(metacls, cls, bases, classdict, *, declaration=_undefined):
+        type.__init__(metacls, cls, bases, classdict)
 
     def __call__(cls, value, names=None, *, module=None, type=None):
         """Either returns an existing member, or creates a new enum class.
