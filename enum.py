@@ -95,6 +95,8 @@ class _EnumDict(dict):
                 # _member_names or it will become an enum anyway when the class
                 # is created
                 self._member_names.remove(key)
+            if key == "__new__":
+                self._enum_class.__new__ = value
             added = value
         else:
             if key in self._member_names:
@@ -105,12 +107,13 @@ class _EnumDict(dict):
                     added._name = key
                     added._value = value
                 else:
-                    added = self[key] = value
+                    added = value
                 self._member_names.append(key)
             except KeyError:
                 if value is self._declaration:
                     try:
                         added = object.__new__(self._enum_class)
+                        added._name = key
                         self._undefined_names[key] = True
                     except TypeError:
                         added = None
@@ -118,9 +121,9 @@ class _EnumDict(dict):
                 else:
                     self._member_names.append(key)
                     try:
-                        added = object.__new__(self._enum_class)
-                        added._value = value
-                    except TypeError:
+                        added = self._enum_class.__new__(self._enum_class, value)
+                        added._name = key
+                    except (TypeError, AttributeError):
                         added = value
         super().__setitem__(key, added)
 
@@ -136,6 +139,12 @@ class EnumMeta(type):
     @classmethod
     def __prepare__(metacls, cls, bases, *, declaration=_undefined):
         enum_class = super().__new__(metacls, cls, bases, {})
+        def __new__set_value(cls, value):
+            self = super(Enum, cls).__new__(cls)
+            self._value = value
+            return self
+        enum_class.__new__ = getattr(
+            enum_class, "__new_member__", __new__set_value)
         return _EnumDict(enum_class, declaration)
 
     def __new__(metacls, cls, bases, classdict, *, declaration=_undefined):
@@ -197,6 +206,7 @@ class EnumMeta(type):
             if isinstance(member, Enum):
                 enum_member = member
                 enum_member.__class__ = enum_class
+                enum_member.__init__(*args)
             else:
                 if not use_args:
                     enum_member = __new__(enum_class)
@@ -205,9 +215,9 @@ class EnumMeta(type):
                     enum_member = __new__(enum_class, *args)
                     if not hasattr(enum_member, '_value'):
                         enum_member._value = member_type(*args)
+                enum_member._name = member_name
+                enum_member.__init__(*args)
             enum_member._member_type = member_type
-            enum_member._name = member_name
-            enum_member.__init__(*args)
             # If another member with the same value was already defined, the
             # new member becomes an alias to the existing one.
             for name, canonical_member in enum_class._member_map.items():
