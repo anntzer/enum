@@ -106,6 +106,7 @@ class _EnumDict(dict):
                     added._value = value
                 else:
                     added = self[key] = value
+                self._member_names.append(key)
             except KeyError:
                 if value is self._declaration:
                     try:

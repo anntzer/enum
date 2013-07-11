@@ -972,6 +972,19 @@ class TestEnum(unittest.TestCase):
                 A = {1: B}
                 B = {1: A}
 
+    def test_forward_reference_init(self):
+        class StateMachine(Enum, declaration=...):
+            B = ...
+            A = "a", B
+            B = "b", A
+            def __init__(self, value, next):
+                self._value = value
+                self.next = next
+        self.assertEqual(StateMachine.B.next, StateMachine.A)
+        self.assertEqual(StateMachine.A.next, StateMachine.B)
+        self.assertEqual(StateMachine.B.name, "B")
+        self.assertEqual(StateMachine.B.value, "b")
+
 
 if __name__ == '__main__':
     unittest.main()
